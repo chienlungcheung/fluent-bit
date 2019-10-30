@@ -25,7 +25,7 @@
 #include <fluent-bit/flb_pack.h>
 #include <msgpack.h>
 
-#include "stdout.h"
+#include "log4j2.h"
 
 static int cb_stdout_init(struct flb_output_instance *ins,
                           struct flb_config *config, void *data)

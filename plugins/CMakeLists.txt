@@ -171,6 +171,7 @@ if(FLB_REGEX)
   REGISTER_FILTER_PLUGIN("filter_nest")
   REGISTER_FILTER_PLUGIN("filter_modify")
   REGISTER_FILTER_PLUGIN("filter_log4j2")
+  REGISTER_FILTER_PLUGIN("filter_log4business")
 endif()
 
 if(FLB_LUAJIT)

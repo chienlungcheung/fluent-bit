@@ -27,6 +27,7 @@
 #include "log4business.h"
 
 static struct flb_regex *log_regex = NULL;
+static struct flb_regex *err_regex = NULL;
 
 static void cb_parse_regex_search_result(const char *name, const char *value,
                                          size_t vlen, void *data) {
@@ -51,6 +52,10 @@ static void cb_parse_regex_search_result(const char *name, const char *value,
     } else if (logMessage->ip == NULL && strcmp(name, "ip") == 0) {
         logMessage->ip = flb_strndup(value, vlen);
         logMessage->ip_len = vlen;
+        logMessage->fileds++;
+    }  else if (logMessage->err == NULL && strcmp(name, "err") == 0) {
+        logMessage->err = flb_strndup(value, vlen);
+        logMessage->err_len = vlen;
         logMessage->fileds++;
     } else {
         flb_warn("[log4business] not supported filed, name = %s, value = %s, vlen = %d", name, value, vlen);
@@ -124,6 +129,19 @@ static int packLogMessage(msgpack_packer *packer, msgpack_object *ts, struct Bus
         msgpack_pack_str_body(packer, value, value_len);
     }
 
+    if (logMessage->err != NULL && logMessage->err_len != 0) {
+        const char *key = "err";
+        const size_t key_len = strlen(key);
+        const char *value = logMessage->err;
+        const size_t value_len = logMessage->err_len;
+        // pack key
+        msgpack_pack_str(packer, key_len);
+        msgpack_pack_str_body(packer, key, key_len);
+        // pack value
+        msgpack_pack_str(packer, value_len);
+        msgpack_pack_str_body(packer, value, value_len);
+    }
+
     return 0;
 }
 
@@ -136,11 +154,27 @@ static inline int split_log_content_and_pack_it(msgpack_packer *packer,
     msgpack_object map = root->via.array.ptr[1];
     const char *log_content = map.via.map.ptr[0].val.via.str.ptr;
     struct flb_regex_search result;
-    // do match
+    // do log match
     int n = flb_regex_do(log_regex, log_content, strlen(log_content), &result);
     if (n <= 0) {
         flb_warn("[filter_log4business] invalid pattern = %s for given log_content =  %s", pattern, log_content);
-        return FLB_FILTER_NOTOUCH;
+        // do err match
+        n = flb_regex_do(err_regex, log_content, strlen(log_content), &result);
+        if (n <= 0) {
+            flb_warn("[filter_log4business] invalid pattern = %s for given log_content =  %s", err_pattern, log_content);
+            return FLB_FILTER_NOTOUCH;
+        } else {
+            struct BusinessLogMessage logMessge;
+            memset(&logMessge, '\0', sizeof(struct BusinessLogMessage));
+            // parse the regex results
+            int ret = flb_regex_parse(err_regex, &result, cb_parse_regex_search_result, &logMessge);
+            if (ret < 0) {
+                return FLB_FILTER_NOTOUCH;
+            } else {
+                packLogMessage(packer, &ts, &logMessge);
+                return FLB_FILTER_MODIFIED;
+            }
+        }
     } else {
         struct BusinessLogMessage logMessge;
         memset(&logMessge, '\0', sizeof(struct BusinessLogMessage));
@@ -161,9 +195,15 @@ static int cb_log4business_init(struct flb_filter_instance *f_ins,
     // initialize flb-regrex module
     flb_regex_init();
     pattern = ".*\\{.*\"millRecvReq\":(?<ts>\\d{10,13}).*\"adUnitId\":(?<adunit>\\d+).*\"app\":\\{.*\"name\":\"(?<app>.+?)\".*\\}.*\"device\":\\{.*\"ip\":\"(?<ip>.+?)\".*\\}.*\\}";
+    err_pattern = "\\{\"handle_request_fail_reason\":(?<err>\\[.*?\\])\\}";
     log_regex = flb_regex_create(pattern);
+    err_regex = flb_regex_create(err_pattern);
     if (log_regex == NULL) {
         flb_error("Could not compile regex. pattern = %s", pattern);
+        return -1;
+    }
+    if (err_regex == NULL) {
+        flb_error("Could not compile regex. pattern = %s", err_pattern);
         return -1;
     }
     return 0;
@@ -233,6 +273,9 @@ static int cb_log4business_filter(const void *data,                  /* msgpack 
 static int cb_log4business_exit(void *data, struct flb_config *config) {
     if (log_regex != NULL) {
         flb_regex_destroy(log_regex);
+    }
+    if (err_regex != NULL) {
+        flb_regex_destroy(err_regex);
     }
     // exit flb-regex module
     flb_regex_exit();
